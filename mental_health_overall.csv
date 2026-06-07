@@ -1,0 +1,7 @@
+﻿indicator,indicator_kr,category,n,pct
+depression,우울장애 유병,우울장애 아님,476,91.7
+depression,우울장애 유병,우울장애 유병,43,8.3
+anxiety,범불안장애 경험,범불안장애 아님,501,96.5
+anxiety,범불안장애 경험,범불안장애 경험,18,3.5
+suicidal_ideation,자살생각 여부,없음,452,87.1
+suicidal_ideation,자살생각 여부,있음,67,12.9
