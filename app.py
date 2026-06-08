@@ -4,8 +4,6 @@ import plotly.express as px
 import plotly.graph_objects as go
 import sqlite3
 import os
-import folium
-from streamlit_folium import folium_static
 import google.generativeai as genai
 
 # --- (0) 페이지 설정 ---
@@ -35,14 +33,6 @@ ANALYSIS_RESULTS = {
         "p_val": 0.732,
         "decision": "기각"
     }
-}
-
-# 시도 명칭 매핑 (DB 약칭 -> GeoJSON 정식명칭)
-SIDO_MAP = {
-    '서울': '서울특별시', '부산': '부산광역시', '대구': '대구광역시', '인천': '인천광역시',
-    '광주': '광주광역시', '대전': '대전광역시', '울산': '울산광역시', '세종': '세종특별자치시',
-    '경기': '경기도', '강원': '강원특별자치도', '충북': '충청북도', '충남': '충청남도',
-    '전북': '전라북도', '전남': '전라남도', '경북': '경상북도', '경남': '경상남도', '제주': '제주특별자치도'
 }
 
 # --- (2) 데이터 로드 함수 ---
@@ -104,45 +94,59 @@ if selection == "데이터 개요":
     ]
     st.table(pd.DataFrame(data_desc))
 
-# --- (C) 인구통계 시각화 ---
+# --- (C) 인구통계 시각화 파트 (오류 방지 동적 로드) ---
 elif selection == "인구통계 현황":
     st.markdown(f"<div id='population'></div>", unsafe_allow_html=True)
-    st.subheader("🗺️ 지역별 인구 및 증가 추세")
+    st.subheader("📊 지역별 인구 및 증가 추세")
     
-    # 1. 지도 (Folium)
-    geo_url = "https://raw.githubusercontent.com/southkorea/southkorea-maps/master/kostat/2013/json/skorea_provinces_geo.json"
-    df_pop = run_query("SELECT * FROM pop_female_sido")
-    df_pop['sido_full'] = df_pop['sido'].map(SIDO_MAP)
+    col_pop, col_trend = st.columns([1, 1])
     
-    m = folium.Map(location=[36.5, 127.5], zoom_start=7)
-    folium.Choropleth(
-        geo_data=geo_url,
-        data=df_pop,
-        columns=['sido_full', 'female_marriage_immigrants'],
-        key_on='feature.properties.name',
-        fill_color='YlGnBu',
-        legend_name='여성 결혼이민자 수'
-    ).add_to(m)
-    
-    col_map, col_trend = st.columns([1, 1])
-    with col_map:
-        st.write("##### 지역별 여성 결혼이민자 분포")
-        folium_static(m, width=500)
-    
+    with col_pop:
+        st.write("##### 지역별 여성 결혼이민자 수")
+        df_pop = run_query("SELECT * FROM pop_female_sido")
+        
+        if not df_pop.empty:
+            # 컬럼명이 영어든 한글이든 상관없이 인덱스로 바인딩 (KeyError 원천 차단)
+            x_col = 'sido' if 'sido' in df_pop.columns else df_pop.columns[0]
+            y_col = 'female_marriage_immigrants' if 'female_marriage_immigrants' in df_pop.columns else df_pop.columns[1]
+            
+            fig_pop = px.bar(df_pop, x=x_col, y=y_col, text_auto='.2s', color=y_col, color_continuous_scale='Blues')
+            fig_pop.update_layout(xaxis_title="지역", yaxis_title="인구 수")
+            st.plotly_chart(fig_pop, use_container_width=True)
+        else:
+            st.error("지역 인구 데이터(pop_female_sido)를 불러올 수 없습니다. DB 파일 혹은 테이블을 확인하세요.")
+
     with col_trend:
         st.write("##### 연도별 증가 추이")
         df_trend = run_query("SELECT * FROM immigrant_trend_total")
-        fig_trend = px.line(df_trend, x='year', y='total_count', markers=True)
-        st.plotly_chart(fig_trend, use_container_width=True)
+        if not df_trend.empty:
+            x_trend = 'year' if 'year' in df_trend.columns else df_trend.columns[0]
+            y_trend = 'total_count' if 'total_count' in df_trend.columns else df_trend.columns[1]
+            
+            fig_trend = px.line(df_trend, x=x_trend, y=y_trend, markers=True)
+            st.plotly_chart(fig_trend, use_container_width=True)
+        else:
+            st.error("연도별 추이 데이터(immigrant_trend_total)를 불러올 수 없습니다.")
 
-    # 2. 국적별 막대 (2024 기준)
+    st.divider()
+    
+    # 국적별 막대
     st.write("##### 국적별 분포 (2024)")
-    df_nat = run_query("SELECT * FROM immigrant_by_nationality WHERE year=2024 ORDER BY n DESC")
-    fig_nat = px.bar(df_nat, x='nationality', y='n', color='n', 
-                     title="중국(60,681), 베트남(41,779) 비중 압도적")
-    st.plotly_chart(fig_nat, use_container_width=True)
+    df_nat = run_query("SELECT * FROM immigrant_by_nationality")
+    if not df_nat.empty:
+        # 2024년 데이터가 있으면 필터링, 없으면 전체 출력
+        if 'year' in df_nat.columns:
+            df_nat = df_nat[df_nat['year'] == 2024] if 2024 in df_nat['year'].values else df_nat
+            
+        x_nat = 'nationality' if 'nationality' in df_nat.columns else df_nat.columns[min(2, len(df_nat.columns)-1)]
+        y_nat = 'n' if 'n' in df_nat.columns else df_nat.columns[min(3, len(df_nat.columns)-1)]
+        
+        fig_nat = px.bar(df_nat, x=x_nat, y=y_nat, color=y_nat, title="국적별 비중 분석")
+        st.plotly_chart(fig_nat, use_container_width=True)
+    else:
+        st.warning("국적별 데이터가 존재하지 않습니다.")
 
-# --- (D) 가설 관련 시각화 ---
+# --- (D) 가설 관련 시각화 파트 (오류 방지 동적 로드) ---
 elif selection == "가설 검증 분석":
     st.markdown(f"<div id='hypothesis'></div>", unsafe_allow_html=True)
     st.subheader("🧪 가설 검증: 지역적 밀집이 차별적 태도를 만드는가?")
@@ -157,19 +161,38 @@ elif selection == "가설 검증 분석":
     
     # 핵심 시각화: 차별경험별 정신건강
     st.subheader("🚨 핵심 요인: 차별 경험이 정신건강에 미치는 영향")
-    df_char = run_query("SELECT * FROM mental_health_by_characteristic WHERE char_group='차별 경험 유무'")
+    df_char_all = run_query("SELECT * FROM mental_health_by_characteristic")
     
-    fig_mental = go.Figure()
-    fig_mental.add_trace(go.Bar(x=df_char['char_category'], y=df_char['suicide_pct'], name='자살 생각(%)'))
-    fig_mental.add_trace(go.Bar(x=df_char['char_category'], y=df_char['depression_pct'], name='우울 장애(%)'))
-    fig_mental.update_layout(title="차별 경험 시 자살생각 위험 약 5배 증가 (30.6% vs 6.1%)", barmode='group')
-    st.plotly_chart(fig_mental, use_container_width=True)
+    if not df_char_all.empty:
+        # 컬럼 이름이 달라도 깨지지 않도록 순서 지정
+        group_col = df_char_all.columns[0] 
+        cat_col = df_char_all.columns[1]   
+        sui_col = df_char_all.columns[2]   
+        dep_col = df_char_all.columns[3]   
+
+        # '차별' 문자가 포함된 행 필터링 시도
+        df_char = df_char_all[df_char_all[group_col].astype(str).str.contains('차별')]
+        if df_char.empty: # 필터링 결과가 없으면 전체 데이터를 시각화 대상으로 지정
+            df_char = df_char_all
+        
+        try:
+            fig_mental = go.Figure()
+            fig_mental.add_trace(go.Bar(x=df_char[cat_col], y=df_char[sui_col], name='자살 생각(%)'))
+            fig_mental.add_trace(go.Bar(x=df_char[cat_col], y=df_char[dep_col], name='우울 장애(%)'))
+            fig_mental.update_layout(title="차별 경험 유무에 따른 정신건강 지표 위험도 차이", barmode='group')
+            st.plotly_chart(fig_mental, use_container_width=True)
+        except Exception as e:
+            st.error(f"차트 시각화 중 오류가 발생했습니다: {e}")
+            st.dataframe(df_char_all.head())
+    else:
+        st.error("정신건강 데이터(mental_health_by_characteristic)를 불러올 수 없습니다.")
+
+    st.divider()
 
     # 돌봄 공백 깔때기
     st.subheader("📉 서비스 전달 체계의 누수 (돌봄 공백)")
-    # 상수 기반 깔때기 (인지 88.3 -> 필요인지 9.8 -> 실제상담 33.3)
     funnel_data = dict(
-        number=[100, 88.3, 9.8, 3.2], # 필요 인지 단계에서 급감
+        number=[100, 88.3, 9.8, 3.2], 
         stage=["전체 응답자", "상담기관 인지", "상담 필요성 인지", "실제 상담 이용"]
     )
     fig_funnel = px.funnel(funnel_data, x='number', y='stage', title="도움이 필요해도 닿지 못하는 구조")
